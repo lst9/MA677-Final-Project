@@ -1,0 +1,183 @@
+---
+title: "Final_Report_MA677"
+author: "Shuting"
+date: "5/11/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(dplyr, tidyr, ggplot2, deconvolveR, cowplot)
+```
+
+# Introduction to Empirical Bayes
+
+## Insurance Claims
+
+```{r, warning=FALSE, message=FALSE}
+##import data
+claims = seq(0,7)
+counts = c(7840,1317,239,42,14,4,4,1)
+dta <- data.frame(claims, counts)
+##Robbins' formula
+RobbinFormula <- NULL
+for (i in 1:length(counts)){
+  RobbinFormula[i] <- round(claims[i+1]*(counts[i+1]/counts[i]),3)
+}
+dta <- cbind(dta, RobbinFormula)
+##gamma MLE
+f <- function(x,nu,sigma){
+  gamma = sigma / (1 + sigma)
+  numer = gamma ^ (nu + x) * gamma(nu + x)
+  denom = sigma ^ nu * gamma(nu) * factorial(x)
+  return(numer/denom)
+}
+negloglikelihood <- function(params){
+  nu = params[1]
+  sigma = params[2]
+  out = -sum(counts*log(f(claims,nu=nu,sigma=sigma)))
+  return(out)
+}
+
+p <- matrix(c(0.5, 1),2,1)
+ans_auto <- nlm(f = negloglikelihood,p,hessian=T)
+nu = ans_auto$estimate[1]
+sigma = ans_auto$estimate[2]
+
+gamma_mle <- NULL
+for (i in 0:6){
+  gamma_mle[i+1] <- round((i+1)*f((i+1), nu, sigma)/f(i, nu, sigma),3)
+}
+
+##combination
+dta <- cbind(dta, gamma_mle = c(gamma_mle, NA))
+t(dta)
+dta$gamma_counts <- c(f(seq(0,6), nu, sigma)*sum(counts), NA)
+                           
+ggplot(dta) + 
+  geom_point(aes(x=claims,y=log(counts)),color='blue')+
+  geom_line(aes(x=claims,y=log(gamma_counts)),color='red',lty=4)
+```
+So, without prior distribution of $g(\theta)$, we can also get the expectation of number of claims for single customer.
+
+## Missing Species
+```{r}
+x=seq(1,24)
+y=c(118,74,44,24,29,22,20,19,20,15,12,14,6,12,6,9,9,6,10,10,11,5,3,3)
+butterfly <- data.frame(x,y)
+##exp&sd
+t <- seq(0,1,by=0.1)
+exp <- NULL
+sd <- NULL
+for (i in 1:length(t)){
+  exp[i] <- round(sum(y*(t[i]^x)*(-1)^(x-1)),2)
+  sd[i] <- round(sqrt(sum(y*t[i]^(2))),2)
+}
+dta <- data.frame(t=t, exp=exp, sd=sd)
+dta
+
+##gamma estimate
+v <- 0.104
+sigma <-  89.79
+gamma <- sigma / (1 + sigma)
+e1 <- y[1]
+gamma_esti <- NULL
+for (i in 1:length(t)){
+  gamma_esti[i] <- round(e1*((1 - (1+gamma*t[i])^(-v)) / (gamma * v)),2)
+}
+gamma_esti
+
+##vasualization
+ggplot(dta)+
+  geom_line(aes(x=t,y=exp))+
+  geom_line(aes(x=t,y=gamma_esti),lty=4,color='red')+
+  geom_errorbar(aes(x=t,ymin=(exp-sd),ymax=(exp+sd)))+theme_bw()
+```
+
+
+
+## Shakespeare’s Vocabulary
+```{r}
+#Reference: https://github.com/bnaras/deconvolveR/blob/master/vignettes/deconvolution.Rmd
+data("bardWordCount", package = "deconvolveR")
+str(bardWordCount)
+
+lambda <- seq(-4, 4.5, .025)
+tau <- exp(lambda)
+
+result <- deconv(tau = tau, y = bardWordCount, n = 100, c0=2)
+stats <- result$stats
+
+ggplot() +
+    geom_line(mapping = aes(x = lambda, y = stats[, "g"])) +
+    labs(x = expression(log(theta)), y = expression(g(theta)))
+```
+The plot below shows the Empirical Bayes deconvoluation estimates for the Shakespeare word counts.
+
+```{r,warning=FALSE}
+d <- data.frame(lambda = lambda, g = stats[, "g"], tg = stats[, "tg"], SE.g = stats[, "SE.g"])
+indices <- seq(1, length(lambda), 5)
+
+ggplot(data = d) +
+    geom_line(mapping = aes(x = lambda, y = g)) +
+    geom_errorbar(data = d[indices, ],
+                  mapping = aes(x = lambda, ymin = g - SE.g, ymax = g + SE.g),
+                  width = .01, color = "blue") +
+    labs(x = expression(log(theta)), y = expression(g(theta))) +
+    ylim(0, 0.006) +
+    geom_line(mapping = aes(x = lambda, y = tg), linetype = "dashed", color = "red")
+
+gPost <- sapply(seq_len(100), function(i) local({tg <- d$tg * result$P[i, ]; tg / sum(tg)}))
+plots <- lapply(c(1, 2, 4, 8), function(i) {
+    ggplot() +
+        geom_line(mapping = aes(x = tau, y = gPost[, i])) +
+        labs(x = expression(theta), y = expression(g(theta)),
+             title = sprintf("x = %d", i))
+})
+plots <- Map(f = function(p, xlim) p + xlim(0, xlim), plots, list(6, 8, 14, 20))
+plot_grid(plotlist = plots, ncol = 2)
+```
+
+## lymph node counts
+```{r}
+#Reference: https://github.com/bnaras/deconvolveR/blob/master/vignettes/deconvolution.Rmd
+data(surg)
+tau <- seq(from = 0.01, to = 0.99, by = 0.01)
+result <- deconv(tau = tau, X = surg, family = "Binomial")
+d <- data.frame(result$stats)
+indices <- seq(5, 99, 3)
+errorX <- tau[indices]
+ggplot() +
+  geom_line(data = d, mapping = aes(x = tau, y = g)) +
+  geom_errorbar(data = d[indices, ],
+                mapping = aes(x = theta, ymin = g - SE.g, ymax = g + SE.g),
+                width = .01, color = "red") +
+  labs(x = expression(theta), y = expression(paste(g(theta), " +/- SE")), caption = "Figure")+theme_bw()
+```
+Estimated prior density $g(\theta)$ for the nodes study.
+
+```{r}
+theta <- result$stats[, 'theta']
+gTheta <- result$stats[, 'g']
+f_alpha <- function(n_k, x_k) {
+    ## .01 is the delta_theta in the Riemann sum
+    sum(dbinom(x = x_k, size = n_k, prob = theta) * gTheta) * .01
+}
+g_theta_hat <- function(n_k, x_k) {
+    gTheta * dbinom(x = x_k, size = n_k, prob = theta) / f_alpha(n_k, x_k)
+}
+
+g1 <- g_theta_hat(x_k = 7, n_k = 32)
+g2 <- g_theta_hat(x_k = 3, n_k = 6)
+g3 <- g_theta_hat(x_k = 17, n_k = 18)
+ggplot() +
+    geom_line(mapping = aes(x = theta, y = g1), col = "magenta") +
+    ylim(0, 10) +
+    geom_line(mapping = aes(x = theta, y = g2), col = "red") +
+    geom_line(mapping = aes(x = theta, y = g3), col = "blue") +
+    labs(x = expression(theta), y = expression(g(paste(theta, "|(x, n)")))) +
+    annotate("text", x = 0.15, y = 4.25, label = "x=7, n=32") +
+    annotate("text", x = 0.425, y = 4.25, label = "x=3, n=6") +
+    annotate("text", x = 0.85, y = 7.5, label = "x=17, n=18") 
+```
+Empirical Bayes posterior densities of $\theta$ for three patients, x is number of positive nodes, n is number of nodes.
